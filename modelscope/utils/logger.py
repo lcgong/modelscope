@@ -9,8 +9,14 @@ init_loggers = {}
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-
 def get_logger(log_file: Optional[str] = None,
+               log_level: int = logging.INFO,
+               file_mode: str = 'w'):
+    logger_name = __name__.split('.')[0]
+    logger = logging.getLogger(logger_name)
+    return logger
+
+def _get_logger(log_file: Optional[str] = None,
                log_level: int = logging.INFO,
                file_mode: str = 'w'):
     """ Get logging logger
