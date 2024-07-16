@@ -58,7 +58,7 @@ TEMPLATE_FILE = 'ast_index_file.py'
 
 def get_ast_logger():
     ast_logger = logging.getLogger('modelscope.ast')
-    ast_logger.setLevel(logging.INFO)
+    # ast_logger.setLevel(logging.INFO)
     return ast_logger
 
 
