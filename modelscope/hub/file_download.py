@@ -168,7 +168,7 @@ def _repo_file_download(
     if not repo_type:
         repo_type = REPO_TYPE_MODEL
     if repo_type not in REPO_TYPE_SUPPORT:
-        raise InvalidParameter('Invalid repo type: %s, only support: %s' (
+        raise InvalidParameter('Invalid repo type: %s, only support: %s' % (
             repo_type, REPO_TYPE_SUPPORT))
 
     temporary_cache_dir, cache = create_temporary_directory_and_cache(
