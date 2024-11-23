@@ -3,7 +3,9 @@
 import argparse
 import logging
 
+from modelscope.cli.clearcache import ClearCacheCMD
 from modelscope.cli.download import DownloadCMD
+from modelscope.cli.llamafile import LlamafileCMD
 from modelscope.cli.login import LoginCMD
 from modelscope.cli.modelcard import ModelCardCMD
 from modelscope.cli.pipeline import PipelineCMD
@@ -23,11 +25,13 @@ def run_cmd():
     subparsers = parser.add_subparsers(help='modelscope commands helpers')
 
     DownloadCMD.define_args(subparsers)
+    ClearCacheCMD.define_args(subparsers)
     PluginsCMD.define_args(subparsers)
     PipelineCMD.define_args(subparsers)
     ModelCardCMD.define_args(subparsers)
     ServerCMD.define_args(subparsers)
     LoginCMD.define_args(subparsers)
+    LlamafileCMD.define_args(subparsers)
 
     args = parser.parse_args()
 

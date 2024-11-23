@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING
 
 from modelscope.utils.import_utils import (LazyImportModule,
                                            is_transformers_available)
-from .utils.automodel_utils import fix_transformers_upgrade
 
 if TYPE_CHECKING:
     from .exporters import Exporter, TfModelExporter, TorchModelExporter
@@ -34,12 +33,12 @@ if TYPE_CHECKING:
     from .utils.constant import Tasks
     if is_transformers_available():
         from .utils.hf_util import AutoConfig, GPTQConfig, AwqConfig, BitsAndBytesConfig
-        from .utils.hf_util import (AutoModel, AutoModelForCausalLM,
-                                    AutoModelForSeq2SeqLM,
-                                    AutoModelForSequenceClassification,
-                                    AutoModelForTokenClassification,
-                                    AutoTokenizer, GenerationConfig,
-                                    AutoImageProcessor, BatchFeature)
+        from .utils.hf_util import (
+            AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM,
+            AutoModelForSequenceClassification,
+            AutoModelForTokenClassification, AutoModelForImageSegmentation,
+            AutoTokenizer, GenerationConfig, AutoImageProcessor, BatchFeature,
+            T5EncoderModel)
     else:
         print(
             'transformer is not installed, please install it if you want to use related modules'
@@ -97,8 +96,8 @@ else:
             'AwqConfig', 'BitsAndBytesConfig', 'AutoModelForCausalLM',
             'AutoModelForSeq2SeqLM', 'AutoTokenizer',
             'AutoModelForSequenceClassification',
-            'AutoModelForTokenClassification', 'AutoImageProcessor',
-            'BatchFeature'
+            'AutoModelForTokenClassification', 'AutoModelForImageSegmentation',
+            'AutoImageProcessor', 'BatchFeature', 'T5EncoderModel'
         ]
 
     import sys
@@ -110,6 +109,3 @@ else:
         module_spec=__spec__,
         extra_objects={},
     )
-
-if is_transformers_available():
-    fix_transformers_upgrade()

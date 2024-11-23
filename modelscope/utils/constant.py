@@ -36,6 +36,7 @@ class CVTasks(object):
     face_processing_base = 'face-processing-base'
     face_attribute_recognition = 'face-attribute-recognition'
     face_2d_keypoints = 'face-2d-keypoints'
+    facial_68ldk_detection = 'facial-68ldk-detection'
     human_detection = 'human-detection'
     human_object_interaction = 'human-object-interaction'
     face_image_generation = 'face-image-generation'
@@ -292,6 +293,10 @@ class ScienceTasks(object):
     protein_structure = 'protein-structure'
 
 
+class Other(object):
+    other = 'other'
+
+
 class TasksIODescriptions(object):
     image_to_image = 'image_to_image',
     images_to_image = 'images_to_image',
@@ -309,7 +314,8 @@ class TasksIODescriptions(object):
     efficient_diffusion_tuning = 'efficient_diffusion_tuning'
 
 
-class Tasks(CVTasks, NLPTasks, AudioTasks, MultiModalTasks, ScienceTasks):
+class Tasks(CVTasks, NLPTasks, AudioTasks, MultiModalTasks, ScienceTasks,
+            Other):
     """ Names for tasks supported by modelscope.
 
     Holds the standard task name to use for identifying different tasks.

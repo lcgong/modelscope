@@ -14,7 +14,7 @@ from typing import Dict, Optional, Union
 
 import requests
 from requests.adapters import Retry
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from modelscope.hub.api import HubApi, ModelScopeConfig
 from modelscope.hub.constants import (
@@ -168,8 +168,8 @@ def _repo_file_download(
     if not repo_type:
         repo_type = REPO_TYPE_MODEL
     if repo_type not in REPO_TYPE_SUPPORT:
-        raise InvalidParameter('Invalid repo type: %s, only support: %s' % (
-            repo_type, REPO_TYPE_SUPPORT))
+        raise InvalidParameter('Invalid repo type: %s, only support: %s' %
+                               (repo_type, REPO_TYPE_SUPPORT))
 
     temporary_cache_dir, cache = create_temporary_directory_and_cache(
         repo_id, local_dir=local_dir, cache_dir=cache_dir, repo_type=repo_type)
@@ -388,7 +388,7 @@ def parallel_download(
         unit_divisor=1024,
         total=file_size,
         initial=0,
-        desc='Downloading',
+        desc='Downloading [' + file_name + ']',
     )
     PART_SIZE = 160 * 1024 * 1024  # every part is 160M
     tasks = []
@@ -461,18 +461,25 @@ def http_get_model_file(
                 unit='B',
                 unit_scale=True,
                 unit_divisor=1024,
-                total=file_size,
+                total=file_size if file_size > 0 else 1,
                 initial=0,
-                desc='Downloading',
+                desc='Downloading [' + file_name + ']',
             )
+            if file_size == 0:
+                # Avoid empty file server request
+                with open(temp_file_path, 'w+'):
+                    progress.update(1)
+                    progress.close()
+                    break
             partial_length = 0
             if os.path.exists(
                     temp_file_path):  # download partial, continue download
                 with open(temp_file_path, 'rb') as f:
                     partial_length = f.seek(0, io.SEEK_END)
                     progress.update(partial_length)
-            if partial_length > file_size:
+            if partial_length >= file_size:
                 break
+            # closed range[], from 0.
             get_headers['Range'] = 'bytes=%s-%s' % (partial_length,
                                                     file_size - 1)
             with open(temp_file_path, 'ab+') as f:
@@ -554,7 +561,7 @@ def http_get_file(
                     unit_divisor=1024,
                     total=total,
                     initial=downloaded_size,
-                    desc='Downloading',
+                    desc='Downloading [' + file_name + ']',
                 )
                 for chunk in r.iter_content(
                         chunk_size=API_FILE_DOWNLOAD_CHUNK_SIZE):

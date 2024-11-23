@@ -11,7 +11,8 @@ from typing import Dict, List, Optional, Union
 from modelscope.hub.api import HubApi, ModelScopeConfig
 from modelscope.hub.errors import InvalidParameter
 from modelscope.hub.utils.caching import ModelFileSystemCache
-from modelscope.hub.utils.utils import model_id_to_group_owner_name
+from modelscope.hub.utils.utils import (get_model_masked_directory,
+                                        model_id_to_group_owner_name)
 from modelscope.utils.constant import (DEFAULT_DATASET_REVISION,
                                        DEFAULT_MODEL_REVISION,
                                        REPO_TYPE_DATASET, REPO_TYPE_MODEL,
@@ -81,10 +82,6 @@ def snapshot_download(
         - [`ValueError`](https://docs.python.org/3/library/exceptions.html#ValueError)
         if some parameter value is invalid
     """
-    if allow_patterns:
-        allow_file_pattern = allow_patterns
-    if ignore_patterns:
-        ignore_file_pattern = ignore_patterns
     return _snapshot_download(
         model_id,
         repo_type=REPO_TYPE_MODEL,
@@ -95,7 +92,9 @@ def snapshot_download(
         cookies=cookies,
         ignore_file_pattern=ignore_file_pattern,
         allow_file_pattern=allow_file_pattern,
-        local_dir=local_dir)
+        local_dir=local_dir,
+        ignore_patterns=ignore_patterns,
+        allow_patterns=allow_patterns)
 
 
 def dataset_snapshot_download(
@@ -157,10 +156,6 @@ def dataset_snapshot_download(
         - [`ValueError`](https://docs.python.org/3/library/exceptions.html#ValueError)
         if some parameter value is invalid
     """
-    if allow_patterns:
-        allow_file_pattern = allow_patterns
-    if ignore_patterns:
-        ignore_file_pattern = ignore_patterns
     return _snapshot_download(
         dataset_id,
         repo_type=REPO_TYPE_DATASET,
@@ -171,7 +166,9 @@ def dataset_snapshot_download(
         cookies=cookies,
         ignore_file_pattern=ignore_file_pattern,
         allow_file_pattern=allow_file_pattern,
-        local_dir=local_dir)
+        local_dir=local_dir,
+        ignore_patterns=ignore_patterns,
+        allow_patterns=allow_patterns)
 
 
 def _snapshot_download(
@@ -186,6 +183,8 @@ def _snapshot_download(
     ignore_file_pattern: Optional[Union[str, List[str]]] = None,
     allow_file_pattern: Optional[Union[str, List[str]]] = None,
     local_dir: Optional[str] = None,
+    allow_patterns: Optional[Union[List[str], str]] = None,
+    ignore_patterns: Optional[Union[List[str], str]] = None,
 ):
     if not repo_type:
         repo_type = REPO_TYPE_MODEL
@@ -195,7 +194,9 @@ def _snapshot_download(
 
     temporary_cache_dir, cache = create_temporary_directory_and_cache(
         repo_id, local_dir=local_dir, cache_dir=cache_dir, repo_type=repo_type)
-
+    system_cache = cache_dir if cache_dir is not None else os.getenv(
+        'MODELSCOPE_CACHE',
+        Path.home().joinpath('.cache', 'modelscope'))
     if local_files_only:
         if len(cache.cached_files) == 0:
             raise ValueError(
@@ -213,12 +214,17 @@ def _snapshot_download(
             ModelScopeConfig.get_user_agent(user_agent=user_agent, ),
         }
         if 'CI_TEST' not in os.environ:
+            # To count the download statistics, to add the snapshot-identifier as a header.
             headers['snapshot-identifier'] = str(uuid.uuid4())
         _api = HubApi()
         if cookies is None:
             cookies = ModelScopeConfig.get_cookies()
         repo_files = []
         if repo_type == REPO_TYPE_MODEL:
+            directory = os.path.abspath(
+                local_dir) if local_dir is not None else os.path.join(
+                    system_cache, 'hub', repo_id)
+            print(f'Downloading Model to directory: {directory}')
             revision_detail = _api.get_valid_revision_detail(
                 repo_id, revision=revision, cookies=cookies)
             revision = revision_detail['Revision']
@@ -249,18 +255,36 @@ def _snapshot_download(
                 None,
                 None,
                 headers,
-                revision_detail=revision_detail,
                 repo_type=repo_type,
                 revision=revision,
                 cookies=cookies,
                 ignore_file_pattern=ignore_file_pattern,
-                allow_file_pattern=allow_file_pattern)
+                allow_file_pattern=allow_file_pattern,
+                ignore_patterns=ignore_patterns,
+                allow_patterns=allow_patterns)
+            if '.' in repo_id:
+                masked_directory = get_model_masked_directory(
+                    directory, repo_id)
+                if os.path.exists(directory):
+                    logger.info(
+                        'Target directory already exists, skipping creation.')
+                else:
+                    logger.info(f'Creating symbolic link [{directory}].')
+                    try:
+                        os.symlink(
+                            os.path.abspath(masked_directory), directory)
+                    except OSError:
+                        logger.warning(
+                            f'Failed to create symbolic link {directory}.')
 
         elif repo_type == REPO_TYPE_DATASET:
+            directory = os.path.abspath(
+                local_dir) if local_dir is not None else os.path.join(
+                    system_cache, 'datasets', repo_id)
+            print(f'Downloading Dataset to directory: {directory}')
             group_or_owner, name = model_id_to_group_owner_name(repo_id)
             if not revision:
                 revision = DEFAULT_DATASET_REVISION
-            _api.dataset_download_statistics(name, group_or_owner)
             revision_detail = revision
             page_number = 1
             page_size = 100
@@ -290,18 +314,48 @@ def _snapshot_download(
                     name,
                     group_or_owner,
                     headers,
-                    revision_detail=revision_detail,
                     repo_type=repo_type,
                     revision=revision,
                     cookies=cookies,
                     ignore_file_pattern=ignore_file_pattern,
-                    allow_file_pattern=allow_file_pattern)
+                    allow_file_pattern=allow_file_pattern,
+                    ignore_patterns=ignore_patterns,
+                    allow_patterns=allow_patterns)
                 if len(repo_files) < page_size:
                     break
                 page_number += 1
 
         cache.save_model_version(revision_info=revision_detail)
         return os.path.join(cache.get_root_location())
+
+
+def _is_valid_regex(pattern: str):
+    try:
+        re.compile(pattern)
+        return True
+    except BaseException:
+        return False
+
+
+def _normalize_patterns(patterns: Union[str, List[str]]):
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    if patterns is not None:
+        patterns = [
+            item if not item.endswith('/') else item + '*' for item in patterns
+        ]
+    return patterns
+
+
+def _get_valid_regex_pattern(patterns: List[str]):
+    if patterns is not None:
+        regex_patterns = []
+        for item in patterns:
+            if _is_valid_regex(item):
+                regex_patterns.append(item)
+        return regex_patterns
+    else:
+        return None
 
 
 def _download_file_lists(
@@ -313,47 +367,57 @@ def _download_file_lists(
     name: str,
     group_or_owner: str,
     headers,
-    revision_detail: str,
     repo_type: Optional[str] = None,
     revision: Optional[str] = DEFAULT_MODEL_REVISION,
     cookies: Optional[CookieJar] = None,
     ignore_file_pattern: Optional[Union[str, List[str]]] = None,
     allow_file_pattern: Optional[Union[str, List[str]]] = None,
+    allow_patterns: Optional[Union[List[str], str]] = None,
+    ignore_patterns: Optional[Union[List[str], str]] = None,
 ):
-    if ignore_file_pattern is None:
-        ignore_file_pattern = []
-    if isinstance(ignore_file_pattern, str):
-        ignore_file_pattern = [ignore_file_pattern]
-    ignore_file_pattern = [
-        item if not item.endswith('/') else item + '*'
-        for item in ignore_file_pattern
-    ]
-    ignore_regex_pattern = []
-    for file_pattern in ignore_file_pattern:
-        if file_pattern.startswith('*'):
-            ignore_regex_pattern.append('.' + file_pattern)
-        else:
-            ignore_regex_pattern.append(file_pattern)
-
-    if allow_file_pattern is not None:
-        if isinstance(allow_file_pattern, str):
-            allow_file_pattern = [allow_file_pattern]
-        allow_file_pattern = [
-            item if not item.endswith('/') else item + '*'
-            for item in allow_file_pattern
-        ]
+    ignore_patterns = _normalize_patterns(ignore_patterns)
+    allow_patterns = _normalize_patterns(allow_patterns)
+    ignore_file_pattern = _normalize_patterns(ignore_file_pattern)
+    allow_file_pattern = _normalize_patterns(allow_file_pattern)
+    # to compatible regex usage.
+    ignore_regex_pattern = _get_valid_regex_pattern(ignore_file_pattern)
 
     for repo_file in repo_files:
-        if repo_file['Type'] == 'tree' or \
-                any([fnmatch.fnmatch(repo_file['Path'], pattern) for pattern in ignore_file_pattern]) or \
-                any([re.search(pattern, repo_file['Name']) is not None for pattern in ignore_regex_pattern]):  # noqa E501
+        if repo_file['Type'] == 'tree':
             continue
-
-        if allow_file_pattern is not None and allow_file_pattern:
-            if not any(
+        try:
+            # processing patterns
+            if ignore_patterns and any([
                     fnmatch.fnmatch(repo_file['Path'], pattern)
-                    for pattern in allow_file_pattern):
+                    for pattern in ignore_patterns
+            ]):
                 continue
+
+            if ignore_file_pattern and any([
+                    fnmatch.fnmatch(repo_file['Path'], pattern)
+                    for pattern in ignore_file_pattern
+            ]):
+                continue
+
+            if ignore_regex_pattern and any([
+                    re.search(pattern, repo_file['Name']) is not None
+                    for pattern in ignore_regex_pattern
+            ]):  # noqa E501
+                continue
+
+            if allow_patterns is not None and allow_patterns:
+                if not any(
+                        fnmatch.fnmatch(repo_file['Path'], pattern)
+                        for pattern in allow_patterns):
+                    continue
+
+            if allow_file_pattern is not None and allow_file_pattern:
+                if not any(
+                        fnmatch.fnmatch(repo_file['Path'], pattern)
+                        for pattern in allow_file_pattern):
+                    continue
+        except Exception as e:
+            logger.warning('The file pattern is invalid : %s' % e)
 
         # check model_file is exist in cache, if existed, skip download, otherwise download
         if cache.exists(repo_file):
@@ -373,6 +437,10 @@ def _download_file_lists(
                 dataset_name=name,
                 namespace=group_or_owner,
                 revision=revision)
+        else:
+            raise InvalidParameter(
+                f'Invalid repo type: {repo_type}, supported types: {REPO_TYPE_SUPPORT}'
+            )
 
         download_file(url, repo_file, temporary_cache_dir, cache, headers,
                       cookies)
