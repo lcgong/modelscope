@@ -10,12 +10,23 @@ from transformers import AutoImageProcessor as AutoImageProcessorHF
 from transformers import AutoModel as AutoModelHF
 from transformers import AutoModelForCausalLM as AutoModelForCausalLMHF
 from transformers import \
+    AutoModelForImageClassification as AutoModelForImageClassificationHF
+from transformers import \
     AutoModelForImageSegmentation as AutoModelForImageSegmentationHF
+from transformers import AutoModelForImageToImage as AutoModelForImageToImageHF
+from transformers import AutoModelForMaskedLM as AutoModelForMaskedLMHF
+from transformers import \
+    AutoModelForMaskGeneration as AutoModelForMaskGenerationHF
+from transformers import AutoModelForPreTraining as AutoModelForPreTrainingHF
+from transformers import \
+    AutoModelForQuestionAnswering as AutoModelForQuestionAnsweringHF
 from transformers import AutoModelForSeq2SeqLM as AutoModelForSeq2SeqLMHF
 from transformers import \
     AutoModelForSequenceClassification as AutoModelForSequenceClassificationHF
+from transformers import AutoModelForTextEncoding as AutoModelForTextEncodingHF
 from transformers import \
     AutoModelForTokenClassification as AutoModelForTokenClassificationHF
+from transformers import AutoModelForVision2Seq as AutoModelForVision2SeqHF
 from transformers import AutoProcessor as AutoProcessorHF
 from transformers import AutoTokenizer as AutoTokenizerHF
 from transformers import BatchFeature as BatchFeatureHF
@@ -23,6 +34,8 @@ from transformers import BitsAndBytesConfig as BitsAndBytesConfigHF
 from transformers import GenerationConfig as GenerationConfigHF
 from transformers import (PretrainedConfig, PreTrainedModel,
                           PreTrainedTokenizerBase)
+from transformers import \
+    Qwen2VLForConditionalGeneration as Qwen2VLForConditionalGenerationHF
 from transformers import T5EncoderModel as T5EncoderModelHF
 
 from modelscope import snapshot_download
@@ -272,7 +285,7 @@ def get_wrapped_class(module_class,
             ignore_file_pattern = kwargs.pop('ignore_file_pattern',
                                              default_ignore_file_pattern)
             subfolder = kwargs.pop('subfolder', default_file_filter)
-
+            file_filter = None
             if subfolder:
                 file_filter = f'{subfolder}/*'
             if not os.path.exists(pretrained_model_name_or_path):
@@ -309,31 +322,57 @@ def get_wrapped_class(module_class,
 AutoModel = get_wrapped_class(AutoModelHF)
 AutoModelForCausalLM = get_wrapped_class(AutoModelForCausalLMHF)
 AutoModelForSeq2SeqLM = get_wrapped_class(AutoModelForSeq2SeqLMHF)
+AutoModelForVision2Seq = get_wrapped_class(AutoModelForVision2SeqHF)
 AutoModelForSequenceClassification = get_wrapped_class(
     AutoModelForSequenceClassificationHF)
 AutoModelForTokenClassification = get_wrapped_class(
     AutoModelForTokenClassificationHF)
 AutoModelForImageSegmentation = get_wrapped_class(
     AutoModelForImageSegmentationHF)
+AutoModelForImageClassification = get_wrapped_class(
+    AutoModelForImageClassificationHF)
+AutoModelForImageToImage = get_wrapped_class(AutoModelForImageToImageHF)
+AutoModelForQuestionAnswering = get_wrapped_class(
+    AutoModelForQuestionAnsweringHF)
+AutoModelForMaskedLM = get_wrapped_class(AutoModelForMaskedLMHF)
+AutoModelForMaskGeneration = get_wrapped_class(AutoModelForMaskGenerationHF)
+AutoModelForPreTraining = get_wrapped_class(AutoModelForPreTrainingHF)
+AutoModelForTextEncoding = get_wrapped_class(AutoModelForTextEncodingHF)
 T5EncoderModel = get_wrapped_class(T5EncoderModelHF)
+Qwen2VLForConditionalGeneration = get_wrapped_class(
+    Qwen2VLForConditionalGenerationHF)
 
 AutoTokenizer = get_wrapped_class(
     AutoTokenizerHF,
     ignore_file_pattern=[
-        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt'
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
+    ])
+AutoProcessor = get_wrapped_class(
+    AutoProcessorHF,
+    ignore_file_pattern=[
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
     ])
 AutoConfig = get_wrapped_class(
     AutoConfigHF,
     ignore_file_pattern=[
-        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt'
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
     ])
 GenerationConfig = get_wrapped_class(
     GenerationConfigHF,
     ignore_file_pattern=[
-        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt'
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
     ])
+BitsAndBytesConfig = get_wrapped_class(
+    BitsAndBytesConfigHF,
+    ignore_file_pattern=[
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
+    ])
+AutoImageProcessor = get_wrapped_class(
+    AutoImageProcessorHF,
+    ignore_file_pattern=[
+        r'\w+\.bin', r'\w+\.safetensors', r'\w+\.pth', r'\w+\.pt', r'\w+\.h5'
+    ])
+
 GPTQConfig = GPTQConfigHF
 AwqConfig = AwqConfigHF
-BitsAndBytesConfig = BitsAndBytesConfigHF
-AutoImageProcessor = get_wrapped_class(AutoImageProcessorHF)
 BatchFeature = get_wrapped_class(BatchFeatureHF)
