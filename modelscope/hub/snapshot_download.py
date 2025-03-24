@@ -8,10 +8,10 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-from tqdm.contrib.concurrent import thread_map
-
 from modelscope.hub.api import HubApi, ModelScopeConfig
 from modelscope.hub.errors import InvalidParameter
+from modelscope.hub.file_download import (create_temporary_directory_and_cache,
+                                          download_file, get_file_download_url)
 from modelscope.hub.utils.caching import ModelFileSystemCache
 from modelscope.hub.utils.utils import (get_model_masked_directory,
                                         model_id_to_group_owner_name)
@@ -19,16 +19,16 @@ from modelscope.utils.constant import (DEFAULT_DATASET_REVISION,
                                        DEFAULT_MODEL_REVISION,
                                        REPO_TYPE_DATASET, REPO_TYPE_MODEL,
                                        REPO_TYPE_SUPPORT)
+from modelscope.utils.file_utils import get_modelscope_cache_dir
 from modelscope.utils.logger import get_logger
-from .file_download import (create_temporary_directory_and_cache,
-                            download_file, get_file_download_url)
+from modelscope.utils.thread_utils import thread_executor
 
 logger = get_logger()
 
 
 def snapshot_download(
-    model_id: str,
-    revision: Optional[str] = DEFAULT_MODEL_REVISION,
+    model_id: str = None,
+    revision: Optional[str] = None,
     cache_dir: Union[str, Path, None] = None,
     user_agent: Optional[Union[Dict, str]] = None,
     local_files_only: Optional[bool] = False,
@@ -39,6 +39,8 @@ def snapshot_download(
     allow_patterns: Optional[Union[List[str], str]] = None,
     ignore_patterns: Optional[Union[List[str], str]] = None,
     max_workers: int = 8,
+    repo_id: str = None,
+    repo_type: Optional[str] = REPO_TYPE_MODEL,
 ) -> str:
     """Download all files of a repo.
     Downloads a whole snapshot of a repo's files at the specified revision. This
@@ -50,7 +52,10 @@ def snapshot_download(
     user always has git and git-lfs installed, and properly configured.
 
     Args:
-        model_id (str): A user or an organization name and a repo name separated by a `/`.
+        repo_id (str): A user or an organization name and a repo name separated by a `/`.
+        model_id (str): A user or an organization name and a model name separated by a `/`.
+            if `repo_id` is provided, `model_id` will be ignored.
+        repo_type (str, optional): The type of the repo, either 'model' or 'dataset'.
         revision (str, optional): An optional Git revision id which can be a branch name, a tag, or a
             commit hash. NOTE: currently only branch and tag name is supported
         cache_dir (str, Path, optional): Path to the folder where cached files are stored, model will
@@ -86,9 +91,22 @@ def snapshot_download(
         - [`ValueError`](https://docs.python.org/3/library/exceptions.html#ValueError)
         if some parameter value is invalid
     """
+
+    repo_id = repo_id or model_id
+    if not repo_id:
+        raise ValueError('Please provide a valid model_id or repo_id')
+
+    if repo_type not in REPO_TYPE_SUPPORT:
+        raise ValueError(
+            f'Invalid repo type: {repo_type}, only support: {REPO_TYPE_SUPPORT}'
+        )
+
+    if revision is None:
+        revision = DEFAULT_DATASET_REVISION if repo_type == REPO_TYPE_DATASET else DEFAULT_MODEL_REVISION
+
     return _snapshot_download(
-        model_id,
-        repo_type=REPO_TYPE_MODEL,
+        repo_id,
+        repo_type=repo_type,
         revision=revision,
         cache_dir=cache_dir,
         user_agent=user_agent,
@@ -203,9 +221,8 @@ def _snapshot_download(
 
     temporary_cache_dir, cache = create_temporary_directory_and_cache(
         repo_id, local_dir=local_dir, cache_dir=cache_dir, repo_type=repo_type)
-    system_cache = cache_dir if cache_dir is not None else os.getenv(
-        'MODELSCOPE_CACHE',
-        Path.home().joinpath('.cache', 'modelscope'))
+    system_cache = cache_dir if cache_dir is not None else get_modelscope_cache_dir(
+    )
     if local_files_only:
         if len(cache.cached_files) == 0:
             raise ValueError(
@@ -221,29 +238,33 @@ def _snapshot_download(
         headers = {
             'user-agent':
             ModelScopeConfig.get_user_agent(user_agent=user_agent, ),
+            'snapshot-identifier': str(uuid.uuid4()),
         }
-        if 'CI_TEST' not in os.environ:
-            # To count the download statistics, to add the snapshot-identifier as a header.
-            headers['snapshot-identifier'] = str(uuid.uuid4())
         _api = HubApi()
+        endpoint = _api.get_endpoint_for_read(
+            repo_id=repo_id, repo_type=repo_type)
         if cookies is None:
             cookies = ModelScopeConfig.get_cookies()
-        repo_files = []
         if repo_type == REPO_TYPE_MODEL:
-            directory = os.path.abspath(
-                local_dir) if local_dir is not None else os.path.join(
-                    system_cache, 'hub', repo_id)
-            print(f'Downloading Model to directory: {directory}')
+            if local_dir:
+                directory = os.path.abspath(local_dir)
+            elif cache_dir:
+                directory = os.path.join(system_cache, *repo_id.split('/'))
+            else:
+                directory = os.path.join(system_cache, 'models',
+                                         *repo_id.split('/'))
+            print(
+                f'Downloading Model from {endpoint} to directory: {directory}')
             revision_detail = _api.get_valid_revision_detail(
-                repo_id, revision=revision, cookies=cookies)
+                repo_id, revision=revision, cookies=cookies, endpoint=endpoint)
             revision = revision_detail['Revision']
 
-            snapshot_header = headers if 'CI_TEST' in os.environ else {
-                **headers,
-                **{
-                    'Snapshot': 'True'
-                }
-            }
+            # Add snapshot-ci-test for counting the ci test download
+            if 'CI_TEST' in os.environ:
+                snapshot_header = {**headers, **{'snapshot-ci-test': 'True'}}
+            else:
+                snapshot_header = {**headers, **{'Snapshot': 'True'}}
+
             if cache.cached_model_revision is not None:
                 snapshot_header[
                     'cached_model_revision'] = cache.cached_model_revision
@@ -254,7 +275,7 @@ def _snapshot_download(
                 recursive=True,
                 use_cookies=False if cookies is None else cookies,
                 headers=snapshot_header,
-            )
+                endpoint=endpoint)
             _download_file_lists(
                 repo_files,
                 cache,
@@ -271,7 +292,9 @@ def _snapshot_download(
                 allow_file_pattern=allow_file_pattern,
                 ignore_patterns=ignore_patterns,
                 allow_patterns=allow_patterns,
-                max_workers=max_workers)
+                max_workers=max_workers,
+                endpoint=endpoint,
+            )
             if '.' in repo_id:
                 masked_directory = get_model_masked_directory(
                     directory, repo_id)
@@ -282,23 +305,29 @@ def _snapshot_download(
                     logger.info(f'Creating symbolic link [{directory}].')
                     try:
                         os.symlink(
-                            os.path.abspath(masked_directory), directory)
+                            os.path.abspath(masked_directory),
+                            directory,
+                            target_is_directory=True)
                     except OSError:
                         logger.warning(
-                            f'Failed to create symbolic link {directory}.')
+                            f'Failed to create symbolic link {directory} for {os.path.abspath(masked_directory)}.'
+                        )
 
         elif repo_type == REPO_TYPE_DATASET:
-            directory = os.path.abspath(
-                local_dir) if local_dir else os.path.join(
-                    system_cache, 'datasets', repo_id)
+            if local_dir:
+                directory = os.path.abspath(local_dir)
+            elif cache_dir:
+                directory = os.path.join(system_cache, *repo_id.split('/'))
+            else:
+                directory = os.path.join(system_cache, 'datasets',
+                                         *repo_id.split('/'))
             print(f'Downloading Dataset to directory: {directory}')
-
             group_or_owner, name = model_id_to_group_owner_name(repo_id)
             revision_detail = revision or DEFAULT_DATASET_REVISION
 
             logger.info('Fetching dataset repo file list...')
             repo_files = fetch_repo_files(_api, name, group_or_owner,
-                                          revision_detail)
+                                          revision_detail, endpoint)
 
             if repo_files is None:
                 logger.error(
@@ -321,16 +350,16 @@ def _snapshot_download(
                 allow_file_pattern=allow_file_pattern,
                 ignore_patterns=ignore_patterns,
                 allow_patterns=allow_patterns,
-                max_workers=max_workers)
+                max_workers=max_workers,
+                endpoint=endpoint,
+            )
 
         cache.save_model_version(revision_info=revision_detail)
         cache_root_path = cache.get_root_location()
-
-        logger.info(f"Download {repo_type} '{repo_id}' successfully.")
         return cache_root_path
 
 
-def fetch_repo_files(_api, name, group_or_owner, revision):
+def fetch_repo_files(_api, name, group_or_owner, revision, endpoint):
     page_number = 1
     page_size = 150
     repo_files = []
@@ -343,7 +372,8 @@ def fetch_repo_files(_api, name, group_or_owner, revision):
             root_path='/',
             recursive=True,
             page_number=page_number,
-            page_size=page_size)
+            page_size=page_size,
+            endpoint=endpoint)
 
         if not ('Code' in files_list_tree and files_list_tree['Code'] == 200):
             logger.error(f'Get dataset file list failed, request_id:  \
@@ -392,22 +422,24 @@ def _get_valid_regex_pattern(patterns: List[str]):
 
 
 def _download_file_lists(
-        repo_files: List[str],
-        cache: ModelFileSystemCache,
-        temporary_cache_dir: str,
-        repo_id: str,
-        api: HubApi,
-        name: str,
-        group_or_owner: str,
-        headers,
-        repo_type: Optional[str] = None,
-        revision: Optional[str] = DEFAULT_MODEL_REVISION,
-        cookies: Optional[CookieJar] = None,
-        ignore_file_pattern: Optional[Union[str, List[str]]] = None,
-        allow_file_pattern: Optional[Union[str, List[str]]] = None,
-        allow_patterns: Optional[Union[List[str], str]] = None,
-        ignore_patterns: Optional[Union[List[str], str]] = None,
-        max_workers: int = 8):
+    repo_files: List[str],
+    cache: ModelFileSystemCache,
+    temporary_cache_dir: str,
+    repo_id: str,
+    api: HubApi,
+    name: str,
+    group_or_owner: str,
+    headers,
+    repo_type: Optional[str] = None,
+    revision: Optional[str] = DEFAULT_MODEL_REVISION,
+    cookies: Optional[CookieJar] = None,
+    ignore_file_pattern: Optional[Union[str, List[str]]] = None,
+    allow_file_pattern: Optional[Union[str, List[str]]] = None,
+    allow_patterns: Optional[Union[List[str], str]] = None,
+    ignore_patterns: Optional[Union[List[str], str]] = None,
+    max_workers: int = 8,
+    endpoint: Optional[str] = None,
+):
     ignore_patterns = _normalize_patterns(ignore_patterns)
     allow_patterns = _normalize_patterns(allow_patterns)
     ignore_file_pattern = _normalize_patterns(ignore_file_pattern)
@@ -450,42 +482,50 @@ def _download_file_lists(
                         fnmatch.fnmatch(repo_file['Path'], pattern)
                         for pattern in allow_file_pattern):
                     continue
+            # check model_file is exist in cache, if existed, skip download
+            if cache.exists(repo_file):
+                file_name = os.path.basename(repo_file['Name'])
+                logger.debug(
+                    f'File {file_name} already in cache with identical hash, skip downloading!'
+                )
+                continue
         except Exception as e:
             logger.warning('The file pattern is invalid : %s' % e)
         else:
             filtered_repo_files.append(repo_file)
 
+    @thread_executor(max_workers=max_workers, disable_tqdm=False)
     def _download_single_file(repo_file):
-        # check model_file is exist in cache, if existed, skip download, otherwise download
-        if cache.exists(repo_file):
-            file_name = os.path.basename(repo_file['Name'])
-            logger.debug(
-                f'File {file_name} already in cache, skip downloading!')
-            return
-
         if repo_type == REPO_TYPE_MODEL:
             url = get_file_download_url(
                 model_id=repo_id,
                 file_path=repo_file['Path'],
-                revision=revision)
+                revision=revision,
+                endpoint=endpoint)
         elif repo_type == REPO_TYPE_DATASET:
             url = api.get_dataset_file_url(
                 file_name=repo_file['Path'],
                 dataset_name=name,
                 namespace=group_or_owner,
-                revision=revision)
+                revision=revision,
+                endpoint=endpoint)
         else:
             raise InvalidParameter(
                 f'Invalid repo type: {repo_type}, supported types: {REPO_TYPE_SUPPORT}'
             )
-        download_file(url, repo_file, temporary_cache_dir, cache, headers,
-                      cookies)
 
-    # Use thread_map for parallel downloading
-    thread_map(
-        _download_single_file,
-        filtered_repo_files,
-        max_workers=max_workers,
-        desc=f'Fetching {len(filtered_repo_files)} files',
-        leave=True,
-        position=max_workers)
+        download_file(
+            url,
+            repo_file,
+            temporary_cache_dir,
+            cache,
+            headers,
+            cookies,
+            disable_tqdm=False,
+        )
+
+    if len(filtered_repo_files) > 0:
+        logger.info(
+            f'Got {len(filtered_repo_files)} files, start to download ...')
+        _download_single_file(filtered_repo_files)
+        logger.info(f"Download {repo_type} '{repo_id}' successfully.")

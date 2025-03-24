@@ -1,8 +1,10 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 
 import copy
+import hashlib
 import io
 import os
+import shutil
 import tempfile
 import urllib
 import uuid
@@ -163,6 +165,7 @@ def _repo_file_download(
     local_files_only: Optional[bool] = False,
     cookies: Optional[CookieJar] = None,
     local_dir: Optional[str] = None,
+    disable_tqdm: bool = False,
 ) -> Optional[str]:  # pragma: no cover
 
     if not repo_type:
@@ -196,25 +199,28 @@ def _repo_file_download(
     if cookies is None:
         cookies = ModelScopeConfig.get_cookies()
     repo_files = []
+    endpoint = _api.get_endpoint_for_read(repo_id=repo_id, repo_type=repo_type)
     file_to_download_meta = None
     if repo_type == REPO_TYPE_MODEL:
         revision = _api.get_valid_revision(
-            repo_id, revision=revision, cookies=cookies)
+            repo_id, revision=revision, cookies=cookies, endpoint=endpoint)
         # we need to confirm the version is up-to-date
         # we need to get the file list to check if the latest version is cached, if so return, otherwise download
         repo_files = _api.get_model_files(
             model_id=repo_id,
             revision=revision,
             recursive=True,
-            use_cookies=False if cookies is None else cookies)
+            use_cookies=False if cookies is None else cookies,
+            endpoint=endpoint)
         for repo_file in repo_files:
             if repo_file['Type'] == 'tree':
                 continue
 
             if repo_file['Path'] == file_path:
                 if cache.exists(repo_file):
+                    file_name = repo_file['Name']
                     logger.debug(
-                        f'File {repo_file["Name"]} already in cache, skip downloading!'
+                        f'File {file_name} already in cache with identical hash, skip downloading!'
                     )
                     return cache.get_file_by_info(repo_file)
                 else:
@@ -234,7 +240,8 @@ def _repo_file_download(
                 root_path='/',
                 recursive=True,
                 page_number=page_number,
-                page_size=page_size)
+                page_size=page_size,
+                endpoint=endpoint)
             if not ('Code' in files_list_tree
                     and files_list_tree['Code'] == 200):
                 print(
@@ -250,8 +257,9 @@ def _repo_file_download(
 
                 if repo_file['Path'] == file_path:
                     if cache.exists(repo_file):
+                        file_name = repo_file['Name']
                         logger.debug(
-                            f'File {repo_file["Name"]} already in cache, skip downloading!'
+                            f'File {file_name} already in cache with identical hash, skip downloading!'
                         )
                         return cache.get_file_by_info(repo_file)
                     else:
@@ -268,15 +276,55 @@ def _repo_file_download(
 
     # we need to download again
     if repo_type == REPO_TYPE_MODEL:
-        url_to_download = get_file_download_url(repo_id, file_path, revision)
+        url_to_download = get_file_download_url(repo_id, file_path, revision,
+                                                endpoint)
     elif repo_type == REPO_TYPE_DATASET:
         url_to_download = _api.get_dataset_file_url(
             file_name=file_to_download_meta['Path'],
             dataset_name=name,
             namespace=group_or_owner,
-            revision=revision)
+            revision=revision,
+            endpoint=endpoint)
+    else:
+        raise ValueError(f'Invalid repo type {repo_type}')
+
     return download_file(url_to_download, file_to_download_meta,
                          temporary_cache_dir, cache, headers, cookies)
+
+
+def move_legacy_cache_to_standard_dir(cache_dir: str, model_id: str):
+    if cache_dir.endswith(os.path.sep):
+        cache_dir = cache_dir.strip(os.path.sep)
+    legacy_cache_root = os.path.dirname(cache_dir)
+    base_name = os.path.basename(cache_dir)
+    if base_name == 'datasets':
+        # datasets will not be not affected
+        return
+    if not legacy_cache_root.endswith('hub'):
+        # Two scenarios:
+        # We have restructured ModelScope cache directory,
+        # Scenery 1:
+        #   When MODELSCOPE_CACHE is not set, the default directory remains
+        #   the same at  ~/.cache/modelscope/hub
+        # Scenery 2:
+        #   When MODELSCOPE_CACHE is not set, the cache directory is moved from
+        #   $MODELSCOPE_CACHE/hub to $MODELSCOPE_CACHE/. In this case,
+        #   we will be migrating the hub directory accordingly.
+        legacy_cache_root = os.path.join(legacy_cache_root, 'hub')
+    group_or_owner, name = model_id_to_group_owner_name(model_id)
+    name = name.replace('.', '___')
+    temporary_cache_dir = os.path.join(cache_dir, group_or_owner, name)
+    legacy_cache_dir = os.path.join(legacy_cache_root, group_or_owner, name)
+    if os.path.exists(
+            legacy_cache_dir) and not os.path.exists(temporary_cache_dir):
+        logger.info(
+            f'Legacy cache dir exists: {legacy_cache_dir}, move to {temporary_cache_dir}'
+        )
+        try:
+            shutil.move(legacy_cache_dir, temporary_cache_dir)
+        except Exception:  # noqa
+            # Failed, skip
+            pass
 
 
 def create_temporary_directory_and_cache(model_id: str,
@@ -287,6 +335,10 @@ def create_temporary_directory_and_cache(model_id: str,
         default_cache_root = get_model_cache_root()
     elif repo_type == REPO_TYPE_DATASET:
         default_cache_root = get_dataset_cache_root()
+    else:
+        raise ValueError(
+            f'repo_type only support model and dataset, but now is : {repo_type}'
+        )
 
     group_or_owner, name = model_id_to_group_owner_name(model_id)
     if local_dir is not None:
@@ -295,6 +347,7 @@ def create_temporary_directory_and_cache(model_id: str,
     else:
         if cache_dir is None:
             cache_dir = default_cache_root
+            move_legacy_cache_to_standard_dir(cache_dir, model_id)
         if isinstance(cache_dir, Path):
             cache_dir = str(cache_dir)
         temporary_cache_dir = os.path.join(cache_dir, TEMPORARY_FOLDER_NAME,
@@ -306,7 +359,10 @@ def create_temporary_directory_and_cache(model_id: str,
     return temporary_cache_dir, cache
 
 
-def get_file_download_url(model_id: str, file_path: str, revision: str):
+def get_file_download_url(model_id: str,
+                          file_path: str,
+                          revision: str,
+                          endpoint: Optional[str] = None):
     """Format file download url according to `model_id`, `revision` and `file_path`.
     e.g., Given `model_id=john/bert`, `revision=master`, `file_path=README.md`,
     the resulted download url is: https://modelscope.cn/api/v1/models/john/bert/repo?Revision=master&FilePath=README.md
@@ -315,6 +371,7 @@ def get_file_download_url(model_id: str, file_path: str, revision: str):
         model_id (str): The model_id.
         file_path (str): File path
         revision (str): File revision.
+        endpoint (str): The remote endpoint
 
     Returns:
         str: The file url.
@@ -322,8 +379,10 @@ def get_file_download_url(model_id: str, file_path: str, revision: str):
     file_path = urllib.parse.quote_plus(file_path)
     revision = urllib.parse.quote_plus(revision)
     download_url_template = '{endpoint}/api/v1/models/{model_id}/repo?Revision={revision}&FilePath={file_path}'
+    if not endpoint:
+        endpoint = get_endpoint()
     return download_url_template.format(
-        endpoint=get_endpoint(),
+        endpoint=endpoint,
         model_id=model_id,
         revision=revision,
         file_path=file_path,
@@ -372,14 +431,14 @@ def download_part_with_retry(params):
             retry.sleep()
 
 
-def parallel_download(
-    url: str,
-    local_dir: str,
-    file_name: str,
-    cookies: CookieJar,
-    headers: Optional[Dict[str, str]] = None,
-    file_size: int = None,
-):
+def parallel_download(url: str,
+                      local_dir: str,
+                      file_name: str,
+                      cookies: CookieJar,
+                      headers: Optional[Dict[str, str]] = None,
+                      file_size: int = None,
+                      disable_tqdm: bool = False,
+                      endpoint: str = None):
     # create temp file
     with tqdm(
             unit='B',
@@ -389,6 +448,7 @@ def parallel_download(
             initial=0,
             desc='Downloading [' + file_name + ']',
             leave=True,
+            disable=disable_tqdm,
     ) as progress:
         PART_SIZE = 160 * 1024 * 1024  # every part is 160M
         tasks = []
@@ -410,12 +470,19 @@ def parallel_download(
             list(executor.map(download_part_with_retry, tasks))
 
     # merge parts.
+    hash_sha256 = hashlib.sha256()
     with open(os.path.join(local_dir, file_name), 'wb') as output_file:
         for task in tasks:
             part_file_name = task[0] + '_%s_%s' % (task[2], task[3])
             with open(part_file_name, 'rb') as part_file:
-                output_file.write(part_file.read())
+                while True:
+                    chunk = part_file.read(16 * API_FILE_DOWNLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    output_file.write(chunk)
+                    hash_sha256.update(chunk)
             os.remove(part_file_name)
+    return hash_sha256.hexdigest()
 
 
 def http_get_model_file(
@@ -425,6 +492,7 @@ def http_get_model_file(
     file_size: int,
     cookies: CookieJar,
     headers: Optional[Dict[str, str]] = None,
+    disable_tqdm: bool = False,
 ):
     """Download remote file, will retry 5 times before giving up on errors.
 
@@ -441,6 +509,7 @@ def http_get_model_file(
             cookies used to authentication the user, which is used for downloading private repos
         headers(Dict[str, str], optional):
             http headers to carry necessary info when requesting the remote file
+        disable_tqdm(bool, optional): Disable the progress bar with tqdm.
 
     Raises:
         FileDownloadError: File download failed.
@@ -452,6 +521,8 @@ def http_get_model_file(
     os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
     logger.debug('downloading %s to %s', url, temp_file_path)
     # retry sleep 0.5s, 1s, 2s, 4s
+    has_retry = False
+    hash_sha256 = hashlib.sha256()
     retry = Retry(
         total=API_FILE_DOWNLOAD_RETRY_TIMES,
         backoff_factor=1,
@@ -466,6 +537,7 @@ def http_get_model_file(
                     initial=0,
                     desc='Downloading [' + file_name + ']',
                     leave=True,
+                    disable=disable_tqdm,
             ) as progress:
                 if file_size == 0:
                     # Avoid empty file server request
@@ -476,6 +548,8 @@ def http_get_model_file(
                 partial_length = 0
                 # download partial, continue download
                 if os.path.exists(temp_file_path):
+                    # resuming from interrupted download is also considered as retry
+                    has_retry = True
                     with open(temp_file_path, 'rb') as f:
                         partial_length = f.seek(0, io.SEEK_END)
                         progress.update(partial_length)
@@ -499,12 +573,16 @@ def http_get_model_file(
                         if chunk:  # filter out keep-alive new chunks
                             progress.update(len(chunk))
                             f.write(chunk)
+                            # hash would be discarded in retry case anyway
+                            if not has_retry:
+                                hash_sha256.update(chunk)
             break
-        except (Exception) as e:  # no matter what happen, we will retry.
+        except Exception as e:  # no matter what happen, we will retry.
+            has_retry = True
             retry = retry.increment('GET', url, error=e)
             retry.sleep()
-
-    logger.debug('storing %s in cache at %s', url, local_dir)
+    # if anything went wrong, we would discard the real-time computed hash and return None
+    return None if has_retry else hash_sha256.hexdigest()
 
 
 def http_get_file(
@@ -589,29 +667,50 @@ def http_get_file(
     os.replace(temp_file.name, os.path.join(local_dir, file_name))
 
 
-def download_file(url, file_meta, temporary_cache_dir, cache, headers,
-                  cookies):
+def download_file(
+    url,
+    file_meta,
+    temporary_cache_dir,
+    cache,
+    headers,
+    cookies,
+    disable_tqdm=False,
+):
     if MODELSCOPE_PARALLEL_DOWNLOAD_THRESHOLD_MB * 1000 * 1000 < file_meta[
             'Size'] and MODELSCOPE_DOWNLOAD_PARALLELS > 1:  # parallel download large file.
-        parallel_download(
+        file_digest = parallel_download(
             url,
             temporary_cache_dir,
             file_meta['Path'],
             headers=headers,
             cookies=None if cookies is None else cookies.get_dict(),
-            file_size=file_meta['Size'])
+            file_size=file_meta['Size'],
+            disable_tqdm=disable_tqdm,
+        )
     else:
-        http_get_model_file(
+        file_digest = http_get_model_file(
             url,
             temporary_cache_dir,
             file_meta['Path'],
             file_size=file_meta['Size'],
             headers=headers,
-            cookies=cookies)
+            cookies=cookies,
+            disable_tqdm=disable_tqdm,
+        )
 
     # check file integrity
     temp_file = os.path.join(temporary_cache_dir, file_meta['Path'])
     if FILE_HASH in file_meta:
-        file_integrity_validation(temp_file, file_meta[FILE_HASH])
+        expected_hash = file_meta[FILE_HASH]
+        # if a real-time hash has been computed
+        if file_digest is not None:
+            # if real-time hash mismatched, try to compute it again
+            if file_digest != expected_hash:
+                print(
+                    'Mismatched real-time digest found, falling back to lump-sum hash computation'
+                )
+                file_integrity_validation(temp_file, expected_hash)
+        else:
+            file_integrity_validation(temp_file, expected_hash)
     # put file into to cache
     return cache.put_file(file_meta, temp_file)

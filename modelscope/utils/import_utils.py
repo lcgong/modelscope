@@ -3,6 +3,7 @@
 import ast
 import functools
 import importlib
+import inspect
 import logging
 import os
 import os.path as osp
@@ -281,6 +282,10 @@ def is_transformers_available():
     return importlib.util.find_spec('transformers') is not None
 
 
+def is_diffusers_available():
+    return importlib.util.find_spec('diffusers') is not None
+
+
 def is_tensorrt_llm_available():
     return importlib.util.find_spec('tensorrt_llm') is not None
 
@@ -384,7 +389,8 @@ class LazyImportModule(ModuleType):
                  import_structure,
                  module_spec=None,
                  extra_objects=None,
-                 try_to_pre_import=False):
+                 try_to_pre_import=False,
+                 extra_import_func=None):
         super().__init__(name)
         self._modules = set(import_structure.keys())
         self._class_to_module = {}
@@ -400,6 +406,7 @@ class LazyImportModule(ModuleType):
         self._objects = {} if extra_objects is None else extra_objects
         self._name = name
         self._import_structure = import_structure
+        self._extra_import_func = extra_import_func
         if try_to_pre_import:
             self._try_to_import()
 
@@ -429,6 +436,11 @@ class LazyImportModule(ModuleType):
         elif name in self._class_to_module.keys():
             module = self._get_module(self._class_to_module[name])
             value = getattr(module, name)
+        elif self._extra_import_func is not None:
+            value = self._extra_import_func(name)
+            if value is None:
+                raise AttributeError(
+                    f'module {self.__name__} has no attribute {name}')
         else:
             raise AttributeError(
                 f'module {self.__name__} has no attribute {name}')
@@ -480,3 +492,23 @@ class LazyImportModule(ModuleType):
             importlib.import_module(module_name)
         else:
             logger.warning(f'{signature} not found in ast index file')
+
+
+def has_attr_in_class(cls, attribute_name) -> bool:
+    """
+    Determine if attribute in specific class.
+
+    Args:
+        cls: target class.
+        attribute_name: the attribute name.
+
+    Returns:
+        The attribute in the class or not.
+    """
+    init_method = cls.__init__
+    signature = inspect.signature(init_method)
+
+    parameters = signature.parameters
+    param_names = list(parameters.keys())
+
+    return attribute_name in param_names

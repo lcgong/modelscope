@@ -10,6 +10,8 @@ from modelscope.utils.config import ConfigDict, check_config
 from modelscope.utils.constant import (DEFAULT_MODEL_REVISION, Invoke, Tasks,
                                        ThirdParty)
 from modelscope.utils.hub import read_config
+from modelscope.utils.import_utils import is_transformers_available
+from modelscope.utils.logger import get_logger
 from modelscope.utils.plugins import (register_modelhub_repo,
                                       register_plugins_repo)
 from modelscope.utils.registry import Registry, build_from_cfg
@@ -17,6 +19,7 @@ from .base import Pipeline
 from .util import is_official_hub_path
 
 PIPELINES = Registry('pipelines')
+logger = get_logger()
 
 
 def normalize_model_input(model,
@@ -72,7 +75,7 @@ def pipeline(task: str = None,
              config_file: str = None,
              pipeline_name: str = None,
              framework: str = None,
-             device: str = 'gpu',
+             device: str = None,
              model_revision: Optional[str] = DEFAULT_MODEL_REVISION,
              ignore_file_pattern: List[str] = None,
              **kwargs) -> Pipeline:
@@ -108,30 +111,8 @@ def pipeline(task: str = None,
     """
     if task is None and pipeline_name is None:
         raise ValueError('task or pipeline_name is required')
-    prefer_llm_pipeline = kwargs.get('external_engine_for_llm')
-    if task is not None and task.lower() in [
-            Tasks.text_generation, Tasks.chat
-    ]:
-        # if not specified, prefer llm pipeline for aforementioned tasks
-        if prefer_llm_pipeline is None:
-            prefer_llm_pipeline = True
-    # for llm pipeline, if llm_framework is not specified, default to swift instead
-    # TODO: port the swift infer based on transformer into ModelScope
-    if prefer_llm_pipeline and kwargs.get('llm_framework') is None:
-        kwargs['llm_framework'] = 'swift'
-    third_party = kwargs.get(ThirdParty.KEY)
-    if third_party is not None:
-        kwargs.pop(ThirdParty.KEY)
-    if pipeline_name is None and prefer_llm_pipeline:
-        pipeline_name = external_engine_for_llm_checker(
-            model, model_revision, kwargs)
-    else:
-        model = normalize_model_input(
-            model,
-            model_revision,
-            third_party=third_party,
-            ignore_file_pattern=ignore_file_pattern)
-    pipeline_props = {'type': pipeline_name}
+
+    pipeline_props = None
     if pipeline_name is None:
         # get default pipeline for this task
         if isinstance(model, str) \
@@ -142,35 +123,92 @@ def pipeline(task: str = None,
                     model, revision=model_revision) if isinstance(
                         model, str) else read_config(
                             model[0], revision=model_revision)
-                register_plugins_repo(cfg.safe_get('plugins'))
-                register_modelhub_repo(model, cfg.get('allow_remote', False))
-                pipeline_name = external_engine_for_llm_checker(
-                    model, model_revision,
-                    kwargs) if prefer_llm_pipeline else None
-                if pipeline_name is not None:
+                if cfg:
+                    pipeline_name = cfg.safe_get('pipeline',
+                                                 {}).get('type', None)
+
+                if pipeline_name is None:
+                    prefer_llm_pipeline = kwargs.get('external_engine_for_llm')
+                    # if not specified in both args and configuration.json, prefer llm pipeline for aforementioned tasks
+                    if task is not None and task.lower() in [
+                            Tasks.text_generation, Tasks.chat
+                    ]:
+                        if prefer_llm_pipeline is None:
+                            prefer_llm_pipeline = True
+                    # for llm pipeline, if llm_framework is not specified, default to swift instead
+                    # TODO: port the swift infer based on transformer into ModelScope
+                    if prefer_llm_pipeline:
+                        if kwargs.get('llm_framework') is None:
+                            kwargs['llm_framework'] = 'swift'
+                        pipeline_name = external_engine_for_llm_checker(
+                            model, model_revision, kwargs)
+
+                if pipeline_name is None or pipeline_name != 'llm':
+                    third_party = kwargs.get(ThirdParty.KEY)
+                    if third_party is not None:
+                        kwargs.pop(ThirdParty.KEY)
+
+                    model = normalize_model_input(
+                        model,
+                        model_revision,
+                        third_party=third_party,
+                        ignore_file_pattern=ignore_file_pattern)
+
+                    register_plugins_repo(cfg.safe_get('plugins'))
+                    register_modelhub_repo(model,
+                                           cfg.get('allow_remote', False))
+
+                if pipeline_name:
                     pipeline_props = {'type': pipeline_name}
                 else:
-                    check_config(cfg)
-                    pipeline_props = cfg.pipeline
+                    try:
+                        check_config(cfg)
+                        pipeline_props = cfg.pipeline
+                    except AssertionError as e:
+                        logger.info(str(e))
+
         elif model is not None:
             # get pipeline info from Model object
             first_model = model[0] if isinstance(model, list) else model
             if not hasattr(first_model, 'pipeline'):
                 # model is instantiated by user, we should parse config again
                 cfg = read_config(first_model.model_dir)
-                check_config(cfg)
-                first_model.pipeline = cfg.pipeline
-            pipeline_props = first_model.pipeline
+                try:
+                    check_config(cfg)
+                    first_model.pipeline = cfg.pipeline
+                except AssertionError as e:
+                    logger.info(str(e))
+            if first_model.__dict__.get('pipeline'):
+                pipeline_props = first_model.pipeline
         else:
             pipeline_name, default_model_repo = get_default_pipeline_info(task)
             model = normalize_model_input(default_model_repo, model_revision)
             pipeline_props = {'type': pipeline_name}
+    else:
+        pipeline_props = {'type': pipeline_name}
 
+    if not pipeline_props and is_transformers_available():
+        try:
+            from modelscope.utils.hf_util import hf_pipeline
+            return hf_pipeline(
+                task=task,
+                model=model,
+                framework=framework,
+                device=device,
+                **kwargs)
+        except Exception as e:
+            logger.error(
+                'We couldn\'t find a suitable pipeline from ms, so we tried to load it using the transformers pipeline,'
+                ' but that also failed.')
+            raise e
+
+    if not device:
+        device = 'gpu'
     pipeline_props['model'] = model
     pipeline_props['device'] = device
     cfg = ConfigDict(pipeline_props)
 
-    clear_llm_info(kwargs)
+    clear_llm_info(kwargs, pipeline_name)
     if kwargs:
         cfg.update(kwargs)
 
@@ -224,22 +262,41 @@ def external_engine_for_llm_checker(model: Union[str, List[str], Model,
                                     revision: Optional[str],
                                     kwargs: Dict[str, Any]) -> Optional[str]:
     from .nlp.llm_pipeline import ModelTypeHelper, LLMAdapterRegistry
-
+    from ..hub.check_model import get_model_id_from_cache
     if isinstance(model, list):
         model = model[0]
     if not isinstance(model, str):
         model = model.model_dir
 
-    if kwargs.get('llm_framework') == 'swift':
-        return 'llm'
+    llm_framework = kwargs.get('llm_framework', '')
+    if llm_framework == 'swift':
+        from swift.llm import get_model_info_meta
+        # check if swift supports
+        if os.path.exists(model):
+            model_id = get_model_id_from_cache(model)
+        else:
+            model_id = model
+
+        try:
+            info = get_model_info_meta(model_id)
+            model_type = info[0].model_type
+        except Exception as e:
+            logger.warning(f'Cannot using llm_framework with {model_id}, '
+                           f'ignoring llm_framework={llm_framework} : {e}')
+            model_type = None
+        if model_type:
+            return 'llm'
+
     model_type = ModelTypeHelper.get(
         model, revision, with_adapter=True, split='-', use_cache=True)
     if LLMAdapterRegistry.contains(model_type):
         return 'llm'
 
 
-def clear_llm_info(kwargs: Dict):
+def clear_llm_info(kwargs: Dict, pipeline_name: str):
     from modelscope.utils.model_type_helper import ModelTypeHelper
 
     kwargs.pop('external_engine_for_llm', None)
+    if pipeline_name != 'llm':
+        kwargs.pop('llm_framework', None)
     ModelTypeHelper.clear_cache()

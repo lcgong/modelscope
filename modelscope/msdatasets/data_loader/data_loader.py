@@ -133,6 +133,11 @@ class OssDownloader(BaseDownloader):
             raise f'meta-file: {dataset_name}.py not found on the modelscope hub.'
 
         if dataset_py_script and dataset_formation == DatasetFormations.hf_compatible:
+            if trust_remote_code:
+                logger.warning(
+                    f'Use trust_remote_code=True. Will invoke codes from {dataset_name}. Please make '
+                    'sure that you can trust the external codes.')
+
             self.dataset = hf_load_dataset(
                 dataset_py_script,
                 name=subset_name,
@@ -283,7 +288,7 @@ class VirgoDownloader(BaseDownloader):
             if download_mode == DownloadMode.FORCE_REDOWNLOAD:
                 shutil.rmtree(data_files_dir, ignore_errors=True)
 
-            from tqdm import tqdm
+            from tqdm.auto import tqdm
             tqdm.pandas(desc='apply download_file')
             self.dataset.meta[
                 VirgoDatasetConfig.

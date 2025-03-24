@@ -2,7 +2,8 @@
 import os
 from contextlib import contextmanager
 from threading import Lock
-from typing import Any, Callable, Dict, Generator, Iterator, List, Tuple, Union
+from typing import (Any, Callable, Dict, Generator, Iterator, List, Optional,
+                    Tuple, Union)
 
 import json
 import numpy as np
@@ -29,7 +30,6 @@ from modelscope.utils.streaming_output import (PipelineStreamingOutputMixin,
 
 logger = get_logger()
 
-SWIFT_MODEL_ID_MAPPING = {}
 SWIFT_FRAMEWORK = 'swift'
 
 
@@ -104,7 +104,7 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
                 invoked_by=Invoke.PIPELINE,
                 device_map=self.device_map,
                 torch_dtype=self.torch_dtype,
-                trust_remote_code=True)
+                trust_remote_code=self.trust_remote_code)
             swift_model = Swift.from_pretrained(base_model, model_id=model)
             return swift_model
 
@@ -138,7 +138,7 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
                 model = AutoModelForCausalLM.from_pretrained(
                     model_dir,
                     device_map=self.device_map,
-                    trust_remote_code=True)
+                    trust_remote_code=self.trust_remote_code)
                 model.model_dir = model_dir
                 return model
         else:
@@ -168,14 +168,16 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
                  format_output: Callable = None,
                  tokenizer: PreTrainedTokenizer = None,
                  llm_framework: str = None,
+                 trust_remote_code: Optional[bool] = None,
                  *args,
                  **kwargs):
         self.device_map = kwargs.pop('device_map', None)
+        self.trust_remote_code = trust_remote_code
         self.llm_framework = llm_framework
 
         if os.path.exists(kwargs['model']):
             config = AutoConfig.from_pretrained(
-                kwargs['model'], trust_remote_code=True)
+                kwargs['model'], trust_remote_code=self.trust_remote_code)
             q_config = config.__dict__.get('quantization_config', None)
             if q_config:
                 if q_config.get(
@@ -216,19 +218,12 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
 
     def _init_swift(self, model_id, device) -> None:
         from swift.llm import prepare_model_template
-        from swift.llm.utils import MODEL_MAPPING, InferArguments
-
-        global SWIFT_MODEL_ID_MAPPING
-        if not SWIFT_MODEL_ID_MAPPING:
-            SWIFT_MODEL_ID_MAPPING = {
-                v['model_id_or_path']: k
-                for k, v in MODEL_MAPPING.items()
-            }
+        from swift.llm import InferArguments, get_model_info_meta
 
         def format_messages(messages: Dict[str, List[Dict[str, str]]],
                             tokenizer: PreTrainedTokenizer,
                             **kwargs) -> Dict[str, torch.Tensor]:
-            inputs, _ = self.template.encode(get_example(messages))
+            inputs = self.template.encode(messages)
             inputs.pop('labels', None)
             if 'input_ids' in inputs:
                 input_ids = torch.tensor(inputs['input_ids'])[None]
@@ -261,9 +256,7 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
             else:
                 return dict(system=system, prompt=prompt, history=history)
 
-        assert model_id in SWIFT_MODEL_ID_MAPPING,\
-            f'Invalid model id {model_id} or Swift framework does not support this model.'
-        args = InferArguments(model_type=SWIFT_MODEL_ID_MAPPING[model_id])
+        args = InferArguments(model=model_id)
         model, template = prepare_model_template(
             args, device_map=self.device_map)
         self.model = add_stream_generate(model)
@@ -434,7 +427,7 @@ class LLMPipeline(Pipeline, PipelineStreamingOutputMixin):
         if tokenizer_class is None:
             tokenizer_class = AutoTokenizer
         return tokenizer_class.from_pretrained(
-            model_dir, trust_remote_code=True)
+            model_dir, trust_remote_code=self.trust_remote_code)
 
     @staticmethod
     def format_messages(messages: Dict[str, List[Dict[str, str]]],

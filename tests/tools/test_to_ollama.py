@@ -7,8 +7,9 @@ from modelscope.preprocessors.templates.loader import TemplateLoader
 from modelscope.utils.test_utils import test_level
 
 
-def _test_check_tmpl_type(model, tmpl_type):
-    ollama, info = TemplateLoader.to_ollama(model, debug=True)
+def _test_check_tmpl_type(model, tmpl_type, gguf_meta={}):
+    ollama, info = TemplateLoader.to_ollama(
+        model, gguf_meta=gguf_meta, debug=True)
     assert info.__dict__.get('modelfile_prefix').split(
         '/')[-1] == tmpl_type, info
 
@@ -122,6 +123,48 @@ class TestToOllama(unittest.TestCase):
     @unittest.skipUnless(test_level() >= 0, 'skip test in current test level')
     def test_check_template_type(self):
         _test_check_tmpl_type(
+            'lmstudio-community/c4ai-command-a-03-2025-GGUF',
+            'command-a',
+            gguf_meta={'general.name': 'C4Ai Command A 03 2025'})
+        _test_check_tmpl_type(
+            'unsloth/gemma-3-27b-it-GGUF',
+            'gemma3',
+            gguf_meta={'general.name': 'Gemma-3-27B-It'})
+        _test_check_tmpl_type(
+            'DevQuasar/CohereForAI.c4ai-command-r7b-arabic-02-2025-GGUF',
+            'command-r7b-arabic',
+            gguf_meta={
+                'general.name': 'CohereForAI.c4ai Command R7B Arabic 02 2025'
+            })
+        _test_check_tmpl_type(
+            'lmstudio-community/granite-vision-3.2-2b-GGUF',
+            'granite3.2-vision',
+            gguf_meta={'general.name': 'Granite Vision 3.2 2b'})
+        _test_check_tmpl_type(
+            'unsloth/Phi-4-mini-instruct-GGUF',
+            'phi4-mini',
+            gguf_meta={'general.name': 'Phi 4 Mini Instruct'})
+        _test_check_tmpl_type(
+            'lmstudio-community/granite-3.2-2b-instruct-GGUF',
+            'granite3.2',
+            gguf_meta={'general.name': 'Granite 3.2 2b Instruct'})
+        _test_check_tmpl_type(
+            'unsloth/r1-1776-GGUF',
+            'r1-1776',
+            gguf_meta={'general.name': 'R1 1776'})
+        _test_check_tmpl_type(
+            'QuantFactory/DeepScaleR-1.5B-Preview-GGUF',
+            'deepscaler',
+            gguf_meta={'general.name': 'DeepScaleR 1.5B Preview'})
+        _test_check_tmpl_type(
+            'lmstudio-community/OpenThinker-32B-GGUF',
+            'openthinker',
+            gguf_meta={'general.name': 'Qwen2.5 7B Instruct'})
+        _test_check_tmpl_type(
+            'LLM-Research/Llama-3.3-70B-Instruct',
+            'llama3.3',
+            gguf_meta={'general.name': 'Llama 3.3 70B Instruct'})
+        _test_check_tmpl_type(
             'AI-ModelScope/Llama-3.2-11B-Vision-Instruct-GGUF',
             'llama3.2-vision')
         _test_check_tmpl_type('LLM-Research/Meta-Llama-3.2-8B-Instruct-GGUF',
@@ -189,6 +232,8 @@ class TestToOllama(unittest.TestCase):
         _test_check_tmpl_type('QuantFactory/Mistral-7B-OpenOrca-GGUF',
                               'mistral-openorca')
         _test_check_tmpl_type('QuantFactory/Mistral-7B-Instruct-v0.1-GGUF',
+                              'mistral')
+        _test_check_tmpl_type('QuantFactory/Ministral-8B-Instruct-2410-GGUF',
                               'mistral')
         _test_check_tmpl_type(
             'second-state/Nous-Hermes-2-Mixtral-8x7B-SFT-GGUF',
@@ -298,6 +343,86 @@ class TestToOllama(unittest.TestCase):
         _test_check_tmpl_type(
             'Ceceliachenen/paraphrase-multilingual-MiniLM-L12-v2',
             'paraphrase-multilingual')
+        _test_check_tmpl_type('bartowski/Marco-o1-GGUF', 'marco-o1')
+        _test_check_tmpl_type('Qwen/QwQ-32B-Preview', 'qwq')
+        _test_check_tmpl_type('LLM-Research/Llama-3.3-70B-Instruct',
+                              'llama3.3')
+        _test_check_tmpl_type('bartowski/EXAONE-3.5-7.8B-Instruct-GGUF',
+                              'exaone3.5')
+        _test_check_tmpl_type(
+            'QuantFactory/Tulu-3.1-8B-SuperNova-Smart-GGUF',
+            'tulu3',
+            gguf_meta={'general.name': 'Tulu 3.1 8B SuperNova'})
+        _test_check_tmpl_type(
+            'bartowski/Athene-V2-Chat-GGUF',
+            'athene-v2',
+            gguf_meta={'general.name': 'Athene V2 Chat'})
+        _test_check_tmpl_type(
+            'QuantFactory/granite-guardian-3.0-2b-GGUF',
+            'granite3-guardian',
+            gguf_meta={'general.name': 'Models'})
+        _test_check_tmpl_type('lmstudio-community/OpenCoder-8B-Instruct-GGUF',
+                              'opencoder')
+        _test_check_tmpl_type(
+            'QuantFactory/SmolLM2-1.7B-Instruct-GGUF',
+            'smollm2',
+            gguf_meta={'general.name': 'Smollm2 1.7B 8k Mix7 Ep2 v2'})
+        _test_check_tmpl_type(
+            'prithivMLmods/Aya-Expanse-8B-GGUF',
+            'aya-expanse',
+            gguf_meta={'general.name': 'Aya Expanse 8b'})
+        _test_check_tmpl_type('lmstudio-community/Falcon3-7B-Instruct-GGUF',
+                              'falcon3')
+        _test_check_tmpl_type(
+            'lmstudio-community/granite-3.1-8b-instruct-GGUF',
+            'granite3.1-dense',
+            gguf_meta={'general.name': 'Granite 3.1 8b Instruct'})
+        _test_check_tmpl_type(
+            'lmstudio-community/granite-3.1-2b-instruct-GGUF',
+            'granite3.1-dense',
+            gguf_meta={'general.name': 'Granite 3.1 2b Instruct'})
+        _test_check_tmpl_type(
+            'lmstudio-community/granite-embedding-278m-multilingual-GGUF',
+            'granite-embedding',
+            gguf_meta={'general.name': 'Granite Embedding 278m Multilingual'})
+        _test_check_tmpl_type(
+            'QuantFactory/granite-3.1-3b-a800m-instruct-GGUF',
+            'granite3.1-moe',
+            gguf_meta={'general.name': 'Granite 3.1 3b A800M Base'})
+        _test_check_tmpl_type(
+            'bartowski/granite-3.1-1b-a400m-instruct-GGUF',
+            'granite3.1-moe',
+            gguf_meta={'general.name': 'Granite 3.1 1b A400M Instruct'})
+        _test_check_tmpl_type(
+            'bartowski/SmallThinker-3B-Preview-GGUF',
+            'smallthinker',
+            gguf_meta={'general.name': 'SmallThinker 3B Preview'})
+        _test_check_tmpl_type(
+            'bartowski/Dolphin3.0-Llama3.1-8B-GGUF',
+            'dolphin3',
+            gguf_meta={'general.name': 'Dolphin 3.0 Llama 3.1 8B'})
+        _test_check_tmpl_type(
+            'AI-ModelScope/phi-4', 'phi4', gguf_meta={'general.name': 'Phi 4'})
+        _test_check_tmpl_type(
+            'yasserrmd/DeepSeek-R1-Distill-Qwen-1.5B-gguf',
+            'deepseek-r1',
+            gguf_meta={'general.name': 'DeepSeek R1 Distill Qwen 1.5B'})
+        _test_check_tmpl_type(
+            'allenai/OLMo-2-1124-7B-Instruct-GGUF',
+            'olmo2',
+            gguf_meta={'general.name': 'Open_Instruct_Dev'})
+        _test_check_tmpl_type(
+            'bartowski/OLMo-2-1124-7B-Instruct-GGUF',
+            'olmo2',
+            gguf_meta={'general.name': 'OLMo 2 1124 7B Instruct'})
+        _test_check_tmpl_type(
+            'bartowski/c4ai-command-r7b-12-2024-abliterated-GGUF',
+            'command-r7b',
+            gguf_meta={'general.name': 'C4Ai Command R7B 12 2024'})
+        _test_check_tmpl_type(
+            'okwinds/DeepSeek-V3-GGUF-V3-LOT',
+            'deepseek-v3',
+            gguf_meta={'general.name': 'DeepSeek V3 Bf16D'})
 
 
 if __name__ == '__main__':

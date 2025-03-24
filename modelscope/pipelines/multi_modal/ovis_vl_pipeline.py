@@ -1,8 +1,8 @@
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 import torch
 
-from modelscope import AutoModelForCausalLM
+from modelscope import AutoModelForCausalLM, get_logger
 from modelscope.metainfo import Pipelines, Preprocessors
 from modelscope.models.base import Model
 from modelscope.outputs import OutputKeys
@@ -12,6 +12,8 @@ from modelscope.pipelines.multi_modal.visual_question_answering_pipeline import 
     VisualQuestionAnsweringPipeline
 from modelscope.preprocessors import Preprocessor, load_image
 from modelscope.utils.constant import Fields, Frameworks, Tasks
+
+logger = get_logger()
 
 
 @PIPELINES.register_module(
@@ -23,7 +25,8 @@ class VisionChatPipeline(VisualQuestionAnsweringPipeline):
                  preprocessor: Preprocessor = None,
                  config_file: str = None,
                  device: str = 'gpu',
-                 auto_collate=True,
+                 auto_collate: bool = True,
+                 trust_remote_code: Optional[bool] = None,
                  **kwargs):
         # super().__init__
         self.device_name = device
@@ -39,7 +42,7 @@ class VisionChatPipeline(VisualQuestionAnsweringPipeline):
             model,
             torch_dtype=torch_dtype,
             multimodal_max_length=multimodal_max_length,
-            trust_remote_code=True).to(self.device)
+            trust_remote_code=trust_remote_code).to(self.device)
         self.text_tokenizer = self.model.get_text_tokenizer()
         self.visual_tokenizer = self.model.get_visual_tokenizer()
 

@@ -6,7 +6,8 @@ from typing import (Any, Callable, Dict, Iterable, List, Mapping, Optional,
                     Sequence, Union)
 
 import numpy as np
-from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
+from datasets import (Dataset, DatasetDict, Features, IterableDataset,
+                      IterableDatasetDict)
 from datasets.packaged_modules import _PACKAGED_DATASETS_MODULES
 from datasets.utils.file_utils import is_relative_path
 
@@ -27,7 +28,8 @@ from modelscope.preprocessors import build_preprocessor
 from modelscope.utils.config import Config, ConfigDict
 from modelscope.utils.config_ds import MS_DATASETS_CACHE
 from modelscope.utils.constant import (DEFAULT_DATASET_NAMESPACE,
-                                       DEFAULT_DATASET_REVISION, ConfigFields,
+                                       DEFAULT_DATASET_REVISION,
+                                       REPO_TYPE_DATASET, ConfigFields,
                                        DatasetFormations, DownloadMode, Hubs,
                                        ModeKeys, Tasks, UploadMode)
 from modelscope.utils.import_utils import is_tf_available, is_torch_available
@@ -163,6 +165,7 @@ class MsDataset:
         download_mode: Optional[DownloadMode] = DownloadMode.
         REUSE_DATASET_IF_EXISTS,
         cache_dir: Optional[str] = MS_DATASETS_CACHE,
+        features: Optional[Features] = None,
         use_streaming: Optional[bool] = False,
         stream_batch_size: Optional[int] = 1,
         custom_cfg: Optional[Config] = Config(),
@@ -214,7 +217,7 @@ class MsDataset:
         download_mode = DownloadMode(download_mode
                                      or DownloadMode.REUSE_DATASET_IF_EXISTS)
         hub = Hubs(hub or Hubs.modelscope)
-
+        is_huggingface_hub = (hub == Hubs.huggingface)
         if not isinstance(dataset_name, str) and not isinstance(
                 dataset_name, list):
             raise TypeError(
@@ -230,12 +233,17 @@ class MsDataset:
         dataset_name = os.path.expanduser(dataset_name)
         is_local_path = os.path.exists(dataset_name)
         if is_relative_path(dataset_name) and dataset_name.count(
-                '/') == 1 and not is_local_path:
+                '/') == 1 and not is_local_path and not is_huggingface_hub:
             dataset_name_split = dataset_name.split('/')
             namespace = dataset_name_split[0].strip()
             dataset_name = dataset_name_split[1].strip()
             if not namespace or not dataset_name:
                 raise 'The dataset_name should be in the form of `namespace/dataset_name` or `dataset_name`.'
+
+        if trust_remote_code:
+            logger.warning(
+                f'Use trust_remote_code=True. Will invoke codes from {dataset_name}. Please make sure that '
+                'you can trust the external codes.')
 
         # Init context config
         dataset_context_config = DatasetContextConfig(
@@ -283,12 +291,16 @@ class MsDataset:
 
         # Load from the modelscope hub
         elif hub == Hubs.modelscope:
-
             # Get dataset type from ModelScope Hub;  dataset_type->4: General Dataset
             from modelscope.hub.api import HubApi
             _api = HubApi()
+            endpoint = _api.get_endpoint_for_read(
+                repo_id=namespace + '/' + dataset_name,
+                repo_type=REPO_TYPE_DATASET)
             dataset_id_on_hub, dataset_type = _api.get_dataset_id_and_type(
-                dataset_name=dataset_name, namespace=namespace)
+                dataset_name=dataset_name,
+                namespace=namespace,
+                endpoint=endpoint)
 
             # Load from the ModelScope Hub for type=4 (general)
             if str(dataset_type) == str(DatasetFormations.general.value):
@@ -300,7 +312,7 @@ class MsDataset:
                         data_files=data_files,
                         split=split,
                         cache_dir=cache_dir,
-                        features=None,
+                        features=features,
                         download_config=None,
                         download_mode=download_mode.value,
                         revision=version,
@@ -329,6 +341,9 @@ class MsDataset:
                 return dataset_inst
 
         elif hub == Hubs.virgo:
+            warnings.warn(
+                'The option `Hubs.virgo` is deprecated, '
+                'will be removed in the future version.', DeprecationWarning)
             from modelscope.msdatasets.data_loader.data_loader import VirgoDownloader
             from modelscope.utils.constant import VirgoDatasetConfig
             # Rewrite the namespace, version and cache_dir for virgo dataset.
@@ -390,8 +405,10 @@ class MsDataset:
 
         """
         warnings.warn(
-            'upload is deprecated, please use git command line to upload the dataset.',
-            DeprecationWarning)
+            'The function `upload` is deprecated, '
+            'please use git command '
+            'or modelscope.hub.api.HubApi.upload_folder '
+            'or modelscope.hub.api.HubApi.upload_file.', DeprecationWarning)
 
         if not object_name:
             raise ValueError('object_name cannot be empty!')
@@ -441,7 +458,7 @@ class MsDataset:
         """
 
         warnings.warn(
-            'upload is deprecated, please use git command line to upload the dataset.',
+            'The function `clone_meta` is deprecated, please use git command line to clone the repo.',
             DeprecationWarning)
 
         _repo = DatasetRepository(
@@ -482,6 +499,12 @@ class MsDataset:
             None
 
         """
+        warnings.warn(
+            'The function `upload_meta` is deprecated, '
+            'please use git command '
+            'or CLI `modelscope upload owner_name/repo_name ...`.',
+            DeprecationWarning)
+
         _repo = DatasetRepository(
             repo_work_dir=dataset_work_dir,
             dataset_id='',
